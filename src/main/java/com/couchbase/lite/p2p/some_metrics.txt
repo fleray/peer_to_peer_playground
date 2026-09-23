@@ -1,0 +1,45 @@
+SERVER (0 docs): # java -jar target/peer-to-peer-1.0.jar --mode server --docs 0
+_doc_9997
+[12:11:21.776]   📥 Received document: client_doc_9998
+[12:11:21.776]   📥 Received document: client_doc_9999
+[12:11:21.776]   📥 Received document: client_doc_10000
+[12:11:21.776]   📊 Throughput: 10000 docs replicated | 1296.8 docs/sec | elapsed: 7.7 sec
+^C[12:24:13.876]
+[12:24:13.879] Shutting down...
+[12:24:17.991]
+
+CLIENT (10K docs): # java -jar target/peer-to-peer-1.0.jar --mode client --docs 10000
+
+[12:11:21.943]   📤 PUSH client_doc_9998 [OK]
+[12:11:21.943]   📤 PUSH client_doc_9999 [OK]
+[12:11:21.943]   📤 PUSH client_doc_10000 [OK]
+[12:11:21.944]   📊 Throughput: 10000 docs replicated | 3769.3 docs/sec | elapsed: 2.7 sec
+[12:11:21.944]   ⟳ Replicator status: BUSY | Progress: 2122444/2122444
+[12:11:21.969]   ⟳ Replicator status: BUSY | Progress: 2122444/2122444
+[12:11:21.969]   ⟳ Replicator status: IDLE | Progress: 2122444/2122444
+^C[12:24:12.170]
+
+------------
+
+
+
+SERVER (0 docs): # java -jar target/peer-to-peer-1.0.jar --mode server --docs 0
+
+[12:25:52.809]   📥 Received document: client_doc_99996
+[12:25:52.809]   📥 Received document: client_doc_99997
+[12:25:52.809]   📥 Received document: client_doc_99998
+[12:25:52.809]   📥 Received document: client_doc_99999
+[12:25:52.809]   📥 Received document: client_doc_100000
+[12:25:52.809]   📊 Throughput: 100000 docs replicated | 3766.9 docs/sec | elapsed: 26.5 sec
+
+
+CLIENT (100K docs): # java -jar target/peer-to-peer-1.0.jar --mode client --docs 100000
+
+
+[12:25:52.876]   📤 PUSH client_doc_99999 [OK]
+[12:25:52.876]   📤 PUSH client_doc_100000 [OK]
+[12:25:52.876]   📊 Throughput: 100000 docs replicated | 7818.6 docs/sec | elapsed: 12.8 sec
+[12:25:52.876]   ⟳ Replicator status: BUSY | Progress: 21922068/21922068
+[12:25:52.876]   ⟳ Replicator status: BUSY | Progress: 21922068/21922068
+[12:25:53.026]   ⟳ Replicator status: IDLE | Progress: 21922068/21922068
+

@@ -37,6 +37,8 @@ java -jar target/peer-to-peer-1.0.jar --mode client --docs 50
 |----------|-------------------|-----------------------------------------------------|
 | `--mode` | `server`/`client` | **Required.** Run as passive listener or active replicator |
 | `--docs` | `N` (integer)     | Number of dummy documents to create locally (default: 10) |
+| `--size` | `N` (integer)     | Size of each dummy document in KB (default: 500) |
+| `--bind` | IP address        | Local IP used for DNS-SD (default: `InetAddress.getLocalHost()`). Use the Wi-Fi IP when the Mac is also on Ethernet and the other peer is a phone on Wi-Fi |
 
 ## How It Works
 
@@ -85,6 +87,8 @@ java -jar target/peer-to-peer-1.0.jar --mode client --docs 50
   - Replication event logging + throughput computation
 
 ## Notes
+
+- **Several interfaces on the same LAN** (e.g. Ethernet + Wi-Fi): JmDNS advertises on a single interface, by default the one behind `getLocalHost()`. Mobile peers on Wi-Fi may then never get answers to their mDNS queries. Bind DNS-SD to the Wi-Fi IP: `--bind $(ipconfig getifaddr en0)`. The listener itself still accepts connections on all interfaces.
 
 - TLS is **disabled** for demo simplicity. Enable it for production use.
 - Each mode uses a separate database directory to avoid conflicts when running both on the same machine.

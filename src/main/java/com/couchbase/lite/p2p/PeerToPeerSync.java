@@ -23,7 +23,9 @@ import javax.jmdns.ServiceListener;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -46,12 +48,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * via DNS-SD (Bonjour) using JmDNS.
  *
  * Usage:
- * java -jar peer-to-peer-1.0.jar --mode server [--docs N]
- * java -jar peer-to-peer-1.0.jar --mode client [--docs N]
+ * java -jar peer-to-peer-1.0.jar --mode server [--docs N] [--size N] [--bind IP]
+ * java -jar peer-to-peer-1.0.jar --mode client [--docs N] [--size N] [--bind IP]
  *
  * Arguments:
  * --mode server | client (required)
  * --docs N Number of dummy documents to create locally (default: 10)
+ * --size N Size of each dummy document in KB (default: 500)
+ * --bind IP Local IP address used for DNS-SD (default: InetAddress.getLocalHost())
  */
 public class PeerToPeerSync {
 
@@ -68,11 +72,15 @@ public class PeerToPeerSync {
     private static final AtomicLong replicationStartTime = new AtomicLong(0);
     private static final AtomicInteger totalDocsLocallyCreated = new AtomicInteger(0);
 
+    // ─── DNS-SD interface (--bind) ───────────────────────────────────────
+    private static String bindAddress = null;
+
     // ─── Entry point ─────────────────────────────────────────────────────
     public static void main(String[] args) throws Exception {
         // Parse CLI arguments
         String mode = null;
         int numDocs = 0;
+        int docSizeKb = 500;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -83,6 +91,14 @@ public class PeerToPeerSync {
                 case "--docs":
                     if (i + 1 < args.length)
                         numDocs = Integer.parseInt(args[++i]);
+                    break;
+                case "--size":
+                    if (i + 1 < args.length)
+                        docSizeKb = Integer.parseInt(args[++i]);
+                    break;
+                case "--bind":
+                    if (i + 1 < args.length)
+                        bindAddress = args[++i];
                     break;
             }
         }
@@ -96,6 +112,8 @@ public class PeerToPeerSync {
         log("  Couchbase Lite 4.0 — Peer-to-Peer Sync Demo");
         log("  Mode : " + mode.toUpperCase());
         log("  Docs : " + numDocs + " dummy documents will be created");
+        log("  Size : " + docSizeKb + " KB per document");
+        log("  Bind : " + (bindAddress != null ? bindAddress : "default (InetAddress.getLocalHost())"));
         log("══════════════════════════════════════════════════════════════");
 
         // Initialize Couchbase Lite
@@ -126,7 +144,7 @@ public class PeerToPeerSync {
         }
 
         // Create dummy documents
-        createDummyDocuments(collection, numDocs, mode);
+        createDummyDocuments(collection, numDocs, mode, docSizeKb);
 
         // Run in the selected mode
         if (mode.equals("server")) {
@@ -140,10 +158,19 @@ public class PeerToPeerSync {
     // DOCUMENT CREATION
     // ═════════════════════════════════════════════════════════════════════
 
-    private static void createDummyDocuments(Collection collection, int count, String mode)
+    private static void createDummyDocuments(Collection collection, int count, String mode, int docSizeKb)
             throws CouchbaseLiteException {
-        log("Creating " + count + " dummy documents...");
+        log("Creating " + count + " dummy documents (" + docSizeKb + " KB each)...");
         long start = System.currentTimeMillis();
+
+        String payloadStr = null;
+        if (docSizeKb > 0) {
+            char[] chars = new char[docSizeKb * 1024];
+            for (int i = 0; i < chars.length; i++) {
+                chars[i] = 'A';
+            }
+            payloadStr = new String(chars);
+        }
 
         for (int i = 1; i <= count; i++) {
             MutableDocument doc = new MutableDocument(mode + "_doc_" + i);
@@ -155,6 +182,11 @@ public class PeerToPeerSync {
             doc.setDouble("value", Math.random() * 1000);
             doc.setString("description",
                     "This is a dummy document created by the " + mode + " peer for P2P sync testing.");
+
+            if (payloadStr != null) {
+                doc.setString("payload", payloadStr);
+            }
+
             collection.save(doc);
         }
 
@@ -192,7 +224,7 @@ public class PeerToPeerSync {
                 for (String docId : docIds) {
                     log("  📥 Received document: " + docId);
                 }
-                printThroughput(totalCount);
+                printThroughput(collection, totalCount);
             }
         });
 
@@ -204,7 +236,7 @@ public class PeerToPeerSync {
         log("  URLs: " + listener.getUrls());
 
         // Register the service via DNS-SD for peer discovery
-        InetAddress localAddress = InetAddress.getLocalHost();
+        InetAddress localAddress = dnsSdAddress();
         log("  Local address: " + localAddress.getHostAddress());
 
         JmDNS jmdns = JmDNS.create(localAddress);
@@ -255,7 +287,7 @@ public class PeerToPeerSync {
         log("  Searching for server via DNS-SD...");
 
         // Discover server via DNS-SD
-        InetAddress localAddress = InetAddress.getLocalHost();
+        InetAddress localAddress = dnsSdAddress();
         JmDNS jmdns = JmDNS.create(localAddress);
 
         CountDownLatch discoveryLatch = new CountDownLatch(1);
@@ -346,7 +378,7 @@ public class PeerToPeerSync {
                 log("  " + direction + " " + doc.getID() + status);
             }
 
-            printThroughput(totalCount);
+            printThroughput(collection, totalCount);
         });
 
         // Start replication
@@ -384,12 +416,23 @@ public class PeerToPeerSync {
     // UTILITY METHODS
     // ═════════════════════════════════════════════════════════════════════
 
-    private static void printThroughput(int totalDocs) {
+    /**
+     * Note : for "server" side of the peering, "totalDocsSent" is always 0 because
+     * there is no easy way of tracking it (because there is no
+     * addDocumentReplicationListener equivalent in "server" mode).
+     * 
+     * So, to have reprensentative throughput for server sync, it is better to run
+     * the server side program with 0 docs.
+     * 
+     * @param collection collection whose current document count is logged
+     * @param totalDocs
+     */
+    private static void printThroughput(Collection collection, int totalDocs) {
         long elapsed = System.currentTimeMillis() - replicationStartTime.get();
         if (elapsed > 0) {
             double docsPerSec = (totalDocs * 1000.0) / elapsed;
-            log(String.format("  📊 Throughput: %d docs replicated | %.1f docs/sec | elapsed: %.1f sec",
-                    totalDocs, docsPerSec, elapsed / 1000.0));
+            log(String.format("  📊 Throughput: %d docs replicated | total docs in DB: %d | %.1f docs/sec | elapsed: %.1f sec",
+                    totalDocs, collection.getCount(), docsPerSec, elapsed / 1000.0));
         }
     }
 
@@ -420,6 +463,34 @@ public class PeerToPeerSync {
         }
     }
 
+    /**
+     * Address JmDNS binds to. With several interfaces on the same LAN (e.g. Ethernet + Wi-Fi),
+     * getLocalHost() may pick one the other peer's mDNS queries never reach: --bind selects
+     * the interface explicitly (e.g. the Wi-Fi IP when the other peer is a phone on Wi-Fi).
+     * The URLEndpointListener itself still listens on all interfaces.
+     */
+    private static InetAddress dnsSdAddress() throws IOException {
+        if (bindAddress == null) {
+            InetAddress a = InetAddress.getLocalHost();
+            log("  DNS-SD address: " + a.getHostAddress() + " (default; use --bind <ip> to choose)");
+            return a;
+        }
+        InetAddress a = InetAddress.getByName(bindAddress);
+        NetworkInterface ni = NetworkInterface.getByInetAddress(a);
+        if (ni == null) {
+            log("ERROR: --bind " + bindAddress + " is not an address of this machine. Local IPv4 addresses:");
+            for (NetworkInterface n : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!n.isUp() || n.isLoopback()) continue;
+                for (InetAddress ia : Collections.list(n.getInetAddresses())) {
+                    if (ia instanceof Inet4Address) log("    " + n.getName() + "  " + ia.getHostAddress());
+                }
+            }
+            System.exit(1);
+        }
+        log("  DNS-SD address: " + a.getHostAddress() + " (interface " + ni.getName() + ", from --bind)");
+        return a;
+    }
+
     private static void log(String message) {
         System.out.println("[" + LocalDateTime.now().format(TIME_FMT) + "] " + message);
     }
@@ -435,6 +506,8 @@ public class PeerToPeerSync {
         System.out.println("  --mode   server    Run as passive peer (listener)");
         System.out.println("           client    Run as active peer (replicator)");
         System.out.println("  --docs   N         Number of dummy documents to create locally (default: 10)");
+        System.out.println("  --size   N         Size of each dummy document in KB (default: 500)");
+        System.out.println("  --bind   IP        Local IP used for DNS-SD, e.g. the Wi-Fi IP (default: InetAddress.getLocalHost())");
         System.out.println();
         System.out.println("Example:");
         System.out.println("  Terminal 1:  java -jar peer-to-peer-1.0.jar --mode server --docs 100");
